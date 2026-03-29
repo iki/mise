@@ -450,7 +450,8 @@ pub fn install_artifact(
             file::create_dir_all(&bin_dir)?;
             bin_dir.join(decompressed_name)
         } else if let Some(bin_name) = lookup_with_fallback(opts, "bin") {
-            install_path.join(&bin_name)
+            let final_name = file_name_with_required_extension(decompressed_name, &bin_name);
+            install_path.join(final_name)
         } else {
             // Auto-clean binary names by removing OS/arch suffixes
             let cleaned_name = clean_binary_name(decompressed_name, Some(&tv.ba().tool_name));
@@ -478,7 +479,9 @@ pub fn install_artifact(
             file::make_executable(&dest)?;
         } else if let Some(bin_name) = lookup_with_fallback(opts, "bin") {
             // If bin is specified, rename the file to this name
-            let dest = install_path.join(&bin_name);
+            let original_name = file_path.file_name().unwrap().to_string_lossy();
+            let final_name = file_name_with_required_extension(&original_name, &bin_name);
+            let dest = install_path.join(final_name);
             file::copy(file_path, &dest)?;
             file::make_executable(&dest)?;
         } else {
@@ -814,37 +817,35 @@ fn rename_executable_in_app_bundle(
     Ok(false)
 }
 
+pub fn file_name_with_extension(file_name: &str, new_name: &str, exts: &[&str]) -> String {
+    for ext in exts {
+        if file_name.to_lowercase().ends_with(ext) && !new_name.to_lowercase().ends_with(ext) {
+            return format!("{}{}", new_name, ext);
+        }
+    }
+    new_name.to_string()
+}
+
+pub fn file_name_with_required_extension(file_name: &str, new_name: &str) -> String {
+    if cfg!(windows) {
+        file_name_with_extension(file_name, new_name, &[".exe", ".cmd", ".bat"])
+    } else {
+        new_name.to_string()
+    }
+}
+
 fn keep_required_extensions(
     dir: &Path,
     file_name: &str,
     new_name: &str,
     target_path: PathBuf,
 ) -> PathBuf {
-    if cfg!(windows) {
-        return keep_extensions(
-            dir,
-            file_name,
-            new_name,
-            target_path,
-            &[".exe", ".cmd", ".bat"],
-        );
+    let final_name = file_name_with_required_extension(file_name, new_name);
+    if final_name != new_name {
+        dir.join(final_name)
+    } else {
+        target_path
     }
-    target_path
-}
-
-fn keep_extensions(
-    dir: &Path,
-    file_name: &str,
-    new_name: &str,
-    target_path: PathBuf,
-    exts: &[&str],
-) -> PathBuf {
-    for ext in exts {
-        if file_name.to_lowercase().ends_with(ext) && !new_name.to_lowercase().ends_with(ext) {
-            return dir.join(format!("{}{}", new_name, ext));
-        }
-    }
-    target_path
 }
 
 /// Cleans a binary name by removing OS/arch suffixes and version numbers.
@@ -1093,83 +1094,77 @@ mod tests {
     }
 
     #[test]
-    fn test_keep_extensions() {
-        let dir = Path::new("/tmp");
-        let initial_target = dir.join("new_tool");
-
-        // Does not append extension not in the list
+    fn test_file_name_with_extension() {
+        // Appends if in the required list
         assert_eq!(
-            keep_extensions(
-                dir,
-                "mytool.sh",
-                "new_tool",
-                initial_target.clone(),
-                &[".exe"]
-            ),
-            initial_target
+            file_name_with_extension("mytool.exe", "new_tool", &[".exe", ".cmd", ".bat"]),
+            "new_tool.exe"
         );
-
-        // Appends if in the list
         assert_eq!(
-            keep_extensions(
-                dir,
-                "mytool.sh",
-                "new_tool",
-                initial_target.clone(),
-                &[".sh"]
-            ),
-            dir.join("new_tool.sh")
+            file_name_with_extension("mytool.cmd", "new_tool", &[".exe", ".cmd", ".bat"]),
+            "new_tool.cmd"
         );
-
+        
         // Case insensitivity handled
         assert_eq!(
-            keep_extensions(
-                dir,
-                "mytool.SH",
-                "new_tool",
-                initial_target.clone(),
-                &[".sh"]
-            ),
-            dir.join("new_tool.sh")
+            file_name_with_extension("MYTOOL.BAT", "new_tool", &[".exe", ".cmd", ".bat"]),
+            "new_tool.bat"
         );
 
         // New name already has extension - avoids double extension
         assert_eq!(
-            keep_extensions(
-                dir,
-                "mytool.exe",
-                "new_tool.exe",
-                dir.join("new_tool.exe"),
-                &[".exe"]
-            ),
-            dir.join("new_tool.exe")
+            file_name_with_extension("mytool.exe", "new_tool.exe", &[".exe", ".cmd", ".bat"]),
+            "new_tool.exe"
+        );
+
+        // Does not append extension not in the required list (e.g., .sh)
+        assert_eq!(
+            file_name_with_extension("mytool.sh", "new_tool", &[".exe", ".cmd", ".bat"]),
+            "new_tool"
+        );
+        
+        // Works with other extensions
+        assert_eq!(
+            file_name_with_extension("script.sh", "myscript", &[".sh"]),
+            "myscript.sh"
         );
     }
 
     #[test]
-    fn test_keep_required_extensions() {
-        let dir = Path::new("/tmp");
-        let initial_target = dir.join("new_tool");
-
+    fn test_file_name_with_required_extension() {
         if cfg!(windows) {
-            // Keeps Windows executable extensions
+            // Appends if in the required list (.exe, .cmd, .bat)
             assert_eq!(
-                keep_required_extensions(dir, "mytool.exe", "new_tool", initial_target.clone()),
-                dir.join("new_tool.exe")
+                file_name_with_required_extension("mytool.exe", "new_tool"),
+                "new_tool.exe"
             );
             assert_eq!(
-                keep_required_extensions(dir, "mytool.cmd", "new_tool", initial_target.clone()),
-                dir.join("new_tool.cmd")
+                file_name_with_required_extension("mytool.cmd", "new_tool"),
+                "new_tool.cmd"
             );
+            
+            // Case insensitivity handled
             assert_eq!(
-                keep_required_extensions(dir, "MYTOOL.BAT", "new_tool", initial_target.clone()),
-                dir.join("new_tool.bat")
+                file_name_with_required_extension("MYTOOL.BAT", "new_tool"),
+                "new_tool.bat"
+            );
+
+            // New name already has extension - avoids double extension
+            assert_eq!(
+                file_name_with_required_extension("mytool.exe", "new_tool.exe"),
+                "new_tool.exe"
+            );
+
+            // Does not append extension not in the required list (e.g., .sh)
+            assert_eq!(
+                file_name_with_required_extension("mytool.sh", "new_tool"),
+                "new_tool"
             );
         } else {
             // Does not append on non-windows
             assert_eq!(
-                keep_required_extensions(dir, "mytool.exe", "new_tool", initial_target.clone()),
-                initial_target
+                file_name_with_required_extension("mytool.exe", "new_tool"),
+                "new_tool"
             );
         }
     }

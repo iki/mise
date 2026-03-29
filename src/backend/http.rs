@@ -3,7 +3,8 @@ use crate::backend::VersionInfo;
 use crate::backend::backend_type::BackendType;
 use crate::backend::static_helpers::{
     clean_binary_name, get_filename_from_url, list_available_platforms_with_key,
-    lookup_platform_key, rename_executable_in_dir, template_string, verify_artifact,
+    lookup_platform_key, rename_executable_in_dir, file_name_with_required_extension,
+    template_string, verify_artifact,
 };
 use crate::backend::version_list;
 use crate::cli::args::BackendArg;
@@ -200,7 +201,12 @@ impl HttpBackend {
     ) -> String {
         // Check for explicit bin name first
         if let Some(bin_name) = get_opt(opts, "bin") {
-            return bin_name;
+            let raw_name = if file_info.is_compressed_binary {
+                file_info.decompressed_name()
+            } else {
+                file_path.file_name().unwrap().to_string_lossy().to_string()
+            };
+            return file_name_with_required_extension(&raw_name, &bin_name);
         }
 
         // Auto-clean the binary name
